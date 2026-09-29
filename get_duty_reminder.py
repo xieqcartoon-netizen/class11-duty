@@ -1,35 +1,31 @@
-import urllib.request
-import urllib.parse
-import json
-import base64
-import zlib
-import re
+import time
+import requests
+import pandas as pd
 import datetime
+import os
 
-# ================= 配置区 =================
+# --- 配置区 ---
 TENCENT_DOC_URL = "https://docs.qq.com/sheet/DY2Z5dGpBY1p4T0xo"
+DOC_ID = "DY2Z5dGpBY1p4T0xo"
+OUTPUT_FILENAME = "temp_duty_sheet.xlsx"
 
-# ⚠️ 请将下方引号内的文字替换为您从微信测试号获取的真实数据
-APPID = "wxa51aa91318272a31"
-APPSECRET = "bf5a9a751bbb55e67056252918c7b6c6"
-OPENID = "o2kfK26g6hXFgHM14r71WduIlosU"
-TEMPLATE_ID = "0sm8dL27YrzvAG607iHs2R-bf42Wf9IQ7ZmsmrFsuM8"
-# ==========================================
+# 从 GitHub Secrets 中安全读取所有凭证和 Cookie
+APPID = os.environ.get("WECHAT_APPID")
+APPSECRET = os.environ.get("WECHAT_APPSECRET")
+OPENID = os.environ.get("WECHAT_OPENID")
+TEMPLATE_ID = os.environ.get("WECHAT_TEMPLATE_ID")
+TENCENT_COOKIE = os.environ.get("TENCENT_COOKIE")
 
 def get_wechat_access_token():
-    """获取微信官方调用凭证"""
     url = f"https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid={APPID}&secret={APPSECRET}"
     try:
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-            return data.get("access_token")
+        resp = requests.get(url)
+        return resp.json().get("access_token")
     except Exception as e:
         print(f"获取微信 Token 失败: {e}")
         return None
 
 def push_to_wechat_official(date_str, parent_name, phone_num):
-    """向微信官方测试号发送模板消息"""
     token = get_wechat_access_token()
     if not token:
         return
@@ -49,127 +45,196 @@ def push_to_wechat_official(date_str, parent_name, phone_num):
         }
     }
 
-    data_bytes = json.dumps(payload).encode('utf-8')
-    req = urllib.request.Request(url, data=data_bytes, headers={"Content-Type": "application/json"})
-
     try:
-        with urllib.request.urlopen(req) as resp:
-            print("微信官方推送结果:", resp.read().decode('utf-8'))
+        resp = requests.post(url, json=payload)
+        print("微信推送结果:", resp.json())
     except Exception as e:
         print("推送微信时发生异常:", e)
 
-def extract_client_vars(html_content):
-    matches = re.findall(r"atob\('([^']+)'\)", html_content)
-    if not matches: return None
-    m = matches[0]
-    missing_padding = len(m) % 4
-    if missing_padding: m += '=' * (4 - missing_padding)
+def export_and_download_excel():
+    """使用 Cookie 调用腾讯官方 API 导出并下载 Excel"""
+    if not TENCENT_COOKIE:
+        print("错误: 未配置 TENCENT_COOKIE 密钥!")
+        return False
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Cookie": TENCENT_COOKIE,
+        "Referer": "https://docs.qq.com/",
+        "Content-Type": "application/json"
+    }
+
+    # 步骤 1: 创建导出任务
+    export_url = "https://docs.qq.com/v1/export/export_office"
+    payload = {
+        "docId": DOC_ID,
+        "version": 2,
+        "exportSource": "client",
+        "exportType": 0,
+        "switches": {
+            "embedFonts": False
+        }
+    }
+
+    print("正在向腾讯服务器创建 Excel 导出任务...")
     try:
-        return json.loads(urllib.parse.unquote(base64.b64decode(m).decode('utf-8', errors='ignore')))
-    except Exception: return None
+        resp = requests.post(export_url, json=payload, headers=headers)
+        res_json = resp.json()
+        if res_json.get("ret") != 0:
+            print(f"导出失败: {res_json.get('msg')}")
+            return False
+        operation_id = res_json.get("operationId")
+    except Exception as e:
+        print(f"请求导出接口失败: {e}")
+        return False
 
-def extract_strings_from_related_sheet(compressed_sheet_b64):
-    decoded_b64 = base64.b64decode(compressed_sheet_b64)
-    decompressed = zlib.decompress(decoded_b64)
-    current_str = []
-    strings = []
-    for idx, b in enumerate(decompressed):
-        is_printable = (32 <= b <= 126) or (0xe4 <= b <= 0xe9) or (0x80 <= b <= 0xbf)
-        if is_printable: current_str.append(b)
-        else:
-            if len(current_str) >= 2:
-                try:
-                    s = bytes(current_str).decode('utf-8')
-                    s_clean = re.sub(r'[\s\x00-\x1f]', '', s)
-                    if len(s_clean) >= 2: strings.append(s_clean)
-                except: pass
-            current_str = []
+    # 步骤 2: 轮询任务进度
+    progress_url = f"https://docs.qq.com/v1/export/query_progress?operationId={operation_id}"
+    file_url = None
+    print("正在等待腾讯云端文件渲染...")
+    for _ in range(15):
+        time.sleep(2)
+        try:
+            progress_resp = requests.get(progress_url, headers=headers)
+            progress_json = progress_resp.json()
+            progress = progress_json.get("progress", 0)
+            print(f"  当前导出进度: {progress}%")
+            if progress == 100:
+                file_url = progress_json.get("file_url")
+                break
+        except Exception as e:
+            print(f"轮询进度发生错误: {e}")
+            return False
 
-    def fix_mojibake(s):
-        try: return s.encode('gbk', errors='ignore').decode('utf-8', errors='ignore')
-        except: return s
+    if not file_url:
+        print("导出超时，未获得下载链接。")
+        return False
 
-    decoded_strings = []
-    for s in strings:
-        fixed = fix_mojibake(s)
-        if not fixed.strip() or len(fixed) < len(s) / 2: fixed = s
-        decoded_strings.append(fixed)
-    return decoded_strings
+    # 步骤 3: 下载 Excel 文件
+    print("正在下载导出的 Excel 表格...")
+    try:
+        file_data = requests.get(file_url)
+        with open(OUTPUT_FILENAME, "wb") as f:
+            f.write(file_data.content)
+        print("Excel 表格成功下载并保存到云端运行环境中！")
+        return True
+    except Exception as e:
+        print(f"下载文件失败: {e}")
+        return False
+
+def parse_and_find_duty():
+    """使用 pandas 精准按列匹配并提取值班家长"""
+    if not os.path.exists(OUTPUT_FILENAME):
+        return None, None
+
+    try:
+        xl = pd.ExcelFile(OUTPUT_FILENAME)
+        sheet_name = xl.sheet_names[0]
+
+        # 寻找当前月份的工作表 (例如 9月值班表)
+        today = datetime.date.today()
+        current_month_str = f"{today.month}月"
+        for name in xl.sheet_names:
+            if current_month_str in name:
+                sheet_name = name
+                break
+
+        print(f"匹配并读取当前月份的工作表: [{sheet_name}]")
+        # 跳过空表头，通常值班表实际内容在第 3 行或第 4 行开始（跳过前 2 行标题）
+        df = pd.read_excel(OUTPUT_FILENAME, sheet_name=sheet_name, header=2)
+
+        # 自动清洗并定位：日期、值班家长、家长手机号码
+        date_col = None
+        parent_col = None
+        phone_col = None
+
+        # 遍历前 4 列，定位字段名
+        for col in df.columns[:5]:
+            col_str = str(col).strip()
+            # 扫描这一列的前几行，查找关键字
+            row_samples = df[col].head(4).astype(str).tolist()
+            if any("日期" in r or "星期" in r for r in row_samples) or "日期" in col_str:
+                if date_col is None: date_col = col
+            if any("家长" in r or "值班" in r for r in row_samples) or "家长" in col_str:
+                parent_col = col
+            if any("手机" in r or "号码" in r or "联系" in r for r in row_samples) or "手机" in col_str:
+                phone_col = col
+
+        # 降级容错备用：如果未自动定位成功，使用前 4 列
+        if date_col is None: date_col = df.columns[0]
+        if parent_col is None: parent_col = df.columns[2]
+        if phone_col is None: phone_col = df.columns[3]
+
+        print(f"🎯 精准定位列 -> 日期列: '{date_col}' | 值班家长列: '{parent_col}' | 手机列: '{phone_col}'")
+
+        # 准备今天日期的多格式匹配方案
+        today_formatted_options = [
+            today.strftime("%Y-%m-%d"),
+            today.strftime("%Y/%m/%d"),
+            f"{today.month}/{today.day}",
+            f"{today.month}月{today.day}日",
+            f"{today.month}月{today.day}",
+            str(today.day), # 单数字如 28
+            f"{today.day}号"
+        ]
+
+        on_duty_parent = "未安排/未登记"
+        parent_phone = "暂无联系方式"
+
+        for idx, row in df.iterrows():
+            raw_date = row[date_col]
+            if pd.isna(raw_date):
+                continue
+
+            # 处理 pandas 读入标准日期产生的 Timestamp 格式
+            if isinstance(raw_date, datetime.datetime) or hasattr(raw_date, 'strftime'):
+                row_date_val = raw_date.strftime("%Y-%m-%d")
+            else:
+                row_date_val = str(raw_date).strip()
+
+            # 精确匹配今天
+            matched = False
+            for opt in today_formatted_options:
+                if opt == row_date_val or (opt in row_date_val and len(opt) > 2):
+                    matched = True
+                    break
+
+            if matched:
+                on_duty_parent = str(row[parent_col]).strip()
+                parent_phone = str(row[phone_col]).strip()
+
+                # 去除 NaN 噪音
+                if on_duty_parent == "nan" or not on_duty_parent or on_duty_parent.isdigit():
+                    on_duty_parent = "未安排/未登记"
+                if parent_phone == "nan" or not parent_phone:
+                    parent_phone = "暂无联系方式"
+
+                print(f"✅ 成功定位到本日值班排班 (Row {idx+3}): {row_date_val} | 家长: {on_duty_parent} | 电话: {parent_phone}")
+                break
+
+        return on_duty_parent, parent_phone
+
+    except Exception as e:
+        print(f"解析 Excel 失败: {e}")
+        return None, None
 
 def main_handler():
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    # 1. 导出并下载 Excel 报表
+    success = export_and_download_excel()
+    if not success:
+        print("未能成功获取 Excel 报表。")
+        return
 
-    req = urllib.request.Request(TENCENT_DOC_URL, headers=headers)
-    try:
-        with urllib.request.urlopen(req) as resp:
-            html = resp.read().decode('utf-8', errors='ignore')
-    except Exception as e:
-        print(f"请求网页失败: {e}"); return
-
-    client_vars = extract_client_vars(html)
-    if not client_vars: return
-
-    pad_info = client_vars.get('docInfo', {}).get('padInfo', {})
-    pad_id = f"{pad_info.get('domainId', '300000000')}${pad_info.get('padId', '')}"
-
-    tabs = []
-    footer_match = re.search(r'id="footerDomStr"[^>]*>([^<]+)</div>', html)
-    if footer_match:
-        try:
-            for t in json.loads(footer_match.group(1)):
-                tab_name = t.get('name', '')
-                try: tab_name = tab_name.encode('gbk', errors='ignore').decode('utf-8', errors='ignore')
-                except: pass
-                tabs.append({'id': t.get('id'), 'name': tab_name})
-        except: pass
-
-    if not tabs: return
+    # 2. 精确解析
+    parent_name, phone_num = parse_and_find_duty()
+    if parent_name is None:
+        return
 
     today = datetime.date.today()
-    current_month_str = f"{today.month}月"
-    target_tab = tabs[0]
-    for t in tabs:
-        if current_month_str in t['name']:
-            target_tab = t; break
-
-    print(f"今日日期: {today.strftime('%Y-%m-%d')}，工作表: [{target_tab['name']}]")
-
-    params = {"padId": pad_id, "subId": target_tab['id'], "startrow": 0, "endrow": 150, "normal": 1, "outformat": 1}
-    api_url_full = f"https://docs.qq.com/dop-api/get/sheet?{urllib.parse.urlencode(params)}"
-    api_req = urllib.request.Request(api_url_full, headers={"User-Agent": headers["User-Agent"], "Referer": TENCENT_DOC_URL})
-
-    try:
-        with urllib.request.urlopen(api_req) as resp:
-            api_data = json.loads(resp.read().decode('utf-8'))
-    except Exception as e:
-        print(f"调用 dop-api 失败: {e}"); return
-
-    text_list = api_data.get('data', {}).get('initialAttributedText', {}).get('text', [])
-    if not text_list: return
-    sheet_strings = extract_strings_from_related_sheet(text_list[0].get('related_sheet', ''))
-
-    search_patterns = [f"{today.month}{today.day}", f"{today.day}号"]
-    on_duty_parent = "未安排/未登记"
-    parent_phone = "暂无联系方式"
-
-    for idx, val in enumerate(sheet_strings):
-        if any(p == val.strip() for p in search_patterns):
-            for offset in range(1, 5):
-                if idx + offset < len(sheet_strings):
-                    next_val = sheet_strings[idx + offset].strip()
-                    if next_val.isdigit() and len(next_val) == 11:
-                        parent_phone = next_val
-                    elif any(k in next_val for k in ["号", "家长", "爸爸", "妈妈"]) or len(next_val) >= 2:
-                        if next_val not in ["周一", "周二", "周三", "周四", "周五", "周六", "周日", "星期", "日期", "值班时间", "家长手机号码",
-"值班时间为"]:
-                            on_duty_parent = next_val
-            break
-
     date_formatted = f"{today.strftime('%Y-%m-%d')} (周{['一','二','三','四','五','六','日'][today.weekday()]})"
-    print(f"解析完成：{date_formatted} | {on_duty_parent} | {parent_phone}")
 
-    # 执行微信推送
-    push_to_wechat_official(date_formatted, on_duty_parent, parent_phone)
+    # 3. 官方安全通道推送
+    push_to_wechat_official(date_formatted, parent_name, phone_num)
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main_handler()
