@@ -2,7 +2,7 @@ name: Daily Duty Reminder
 
 on:
   schedule:
-    # 北京时间早上 8:00 自动触发
+    # 北京时间每天早上 8:00 自动运行
     - cron: '0 0 * * *'
   workflow_dispatch:
 
@@ -11,14 +11,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4 # 升级到 v4，彻底消除 Node.js 警告
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5 # 升级到 v5，彻底消除 Node.js 警告
         with:
           python-version: '3.10'
 
-      # 增加安装 pandas 和 openpyxl 用于完美读取 Excel 文件
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -29,6 +28,6 @@ jobs:
           WECHAT_APPID: ${{ secrets.WECHAT_APPID }}
           WECHAT_APPSECRET: ${{ secrets.WECHAT_APPSECRET }}
           WECHAT_OPENID: ${{ secrets.WECHAT_OPENID }}
-          WECHAT_TEMPLATE_ID: ${{ secrets.TEMPLATE_ID }}
+          WECHAT_TEMPLATE_ID: ${{ secrets.WECHAT_TEMPLATE_ID }} # 完美修复对齐偏差
           TENCENT_COOKIE: ${{ secrets.TENCENT_COOKIE }}
         run: python get_duty_reminder.py
