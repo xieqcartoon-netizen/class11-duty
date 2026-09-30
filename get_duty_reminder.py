@@ -106,7 +106,7 @@ async def download_via_playwright():
             await file_menu.click()
             await page.wait_for_timeout(2000)
 
-             print("4. 正在定位二级菜单 '导出为' 点击展开...")
+            print("4. 正在定位二级菜单 '导出为' 点击展开...")
              export_menu = page.locator("text=导出为").first
              if await export_menu.count() > 0:
                  print("  找到了 '导出为'，正在点击展开...")
