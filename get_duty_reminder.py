@@ -106,30 +106,35 @@ async def download_via_playwright():
             await file_menu.click()
             await page.wait_for_timeout(2000)
 
-            print("4. 正在定位二级菜单 '导出为' 悬停展开...")
-            # 当菜单弹开时，腾讯的 DOM 结构通常会在全局添加下拉列表。支持多种定位方式
-            export_menu = page.locator("text=导出为").first
-            if await export_menu.count() > 0:
-                print("  找到了 '导出为'，正在悬停展开...")
-                await export_menu.hover()
-                await page.wait_for_timeout(2000)
-
-                print("5. 正在定位 '本地 Excel 表格' 下载选项...")
-                excel_option = page.locator("text=本地 Excel").first or page.locator("text=本地Excel").first
-                if await excel_option.count() > 0:
-                    print("  [触发下载] 正在生成并下载 Excel 流...")
-                    try:
-                        async with page.expect_download(timeout=20000) as download_info:
-                            await excel_option.click()
-                        download = await download_info.value
-                        await download.save_as(OUTPUT_FILENAME)
-                        print(f"🎉 成功! 精准数据已完美下载到云端环境: {OUTPUT_FILENAME}")
-                        await browser.close()
-                        return True
-                    except Exception as ex:
-                        print(f"点击下载或保存文件时发生异常: {ex}")
-                else:
-                    print("未找到 '本地 Excel' 选项。")
+             print("4. 正在定位二级菜单 '导出为' 点击展开...")
+             export_menu = page.locator("text=导出为").first
+             if await export_menu.count() > 0:
+                 print("  找到了 '导出为'，正在点击展开...")
+                 await export_menu.click() # 🌟 hover() 改为更稳定的 click() 强制展开子菜单
+                 await page.wait_for_timeout(2000)
+    
+                 print("5. 正在定位 '本地 Excel 表格' 下载选项...")
+                 # 🌟 精准匹配具有 .dui-menu-item 样式且包含 'Excel' 文字的按钮
+                 excel_option = page.locator(".dui-menu-item:has-text('Excel')").first
+                 if await excel_option.count() == 0:
+                     excel_option = page.locator(".dui-menu-item:has-text('xlsx')").first
+                 if await excel_option.count() == 0:
+                     excel_option = page.locator("text=本地 Excel").first
+    
+                 if await excel_option.count() > 0:
+                     print("  [触发下载] 正在生成并下载 Excel 流...")
+                     try:
+                         async with page.expect_download(timeout=25000) as download_info:
+                             await excel_option.click()
+                         download = await download_info.value
+                         await download.save_as(OUTPUT_FILENAME)
+                         print(f"🎉 成功! 精准数据已完美下载到云端环境: {OUTPUT_FILENAME}")
+                         await browser.close()
+                         return True
+                     except Exception as ex:
+                         print(f"点击下载或保存文件时发生异常: {ex}")
+                 else:
+                     print("未找到 '本地 Excel' 选项。")
             else:
                 print("未找到 '导出为' 菜单选项。")
         else:
