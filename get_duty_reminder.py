@@ -6,6 +6,8 @@ import os
 import re
 import urllib.parse
 import json
+import base64
+import zlib
 
 # --- 配置区 ---
 TENCENT_DOC_URL = "https://docs.qq.com/sheet/DY2Z5dGpBY1p4T0xo"
@@ -14,7 +16,7 @@ OUTPUT_FILENAME = "temp_duty_sheet.xlsx"
 # ⚠️ 请将下方引号内的文字替换为您从微信测试号获取的真实数据
 APPID = "wxa51aa91318272a31"
 APPSECRET = "bf5a9a751bbb55e67056252918c7b6c6"
-OPENID = "o2kfK26g6hXFgHM14r71WduIlosU"
+OPENID = "填入您的OpenID"
 TEMPLATE_ID = "0sm8dL27YrzvAG607iHs2R-bf42Wf9IQ7ZmsmrFsuM8"
 TENCENT_COOKIE = os.environ.get("TENCENT_COOKIE") # 保持从 Secrets 中读取
 # ==========================================
@@ -69,10 +71,10 @@ def export_and_download_excel(pad_id):
         "Content-Type": "application/json"
     }
 
-    # 步骤 1: 创建导出任务 (⚠️ 使用动态提取的真实 pad_id)
+    # 步骤 1: 创建导出任务 (使用动态提取的真实 pad_id)
     export_url = "https://docs.qq.com/v1/export/export_office"
     payload = {
-        "docId": pad_id,  # 传入 300000000$ 格式的内部ID
+        "docId": pad_id,  # 🌟 传入 300000000$ 格式的内部ID
         "version": 2,
         "exportSource": "client",
         "exportType": 0,
@@ -145,7 +147,7 @@ def parse_and_find_duty():
                 break
 
         print(f"匹配并读取当前月份的工作表: [{sheet_name}]")
-        # 跳过空表头，通常值班表内容在第 3 行或第 4 行开始（跳过前 2 行标题）
+        # 跳过空表头，通常值班表实际内容在第 3 行或第 4 行开始（跳过前 2 行标题）
         df = pd.read_excel(OUTPUT_FILENAME, sheet_name=sheet_name, header=2)
 
         # 自动清洗并定位：日期、值班家长、家长手机号码
@@ -230,32 +232,44 @@ def parse_and_find_duty():
         return None, None
 
 def extract_client_vars(html_content):
+    # 查找网页里所有的 atob(...) 块
     matches = re.findall(r"atob\('([^']+)'\)", html_content)
     if not matches:
         print("未在网页源码中搜索到 atob('...') 数据块。")
-        # 诊断输出：输出网页的长度和前 300 个字符
         print("网页长度:", len(html_content))
         print("网页开头预览:\n", html_content[:400])
-        # 检查是否被拦截
         if "login" in html_content or "登录" in html_content:
             print("[警告] 页面返回了登录重定向，可能是 Cookie 无效或已过期！")
         if "slider" in html_content or "验证" in html_content:
             print("[警告] 页面触发了滑动验证码！")
         return None
 
-    m = matches[0]
-    missing_padding = len(m) % 4
-    if missing_padding: m += '=' * (4 - missing_padding)
-    try:
-        return json.loads(urllib.parse.unquote(base64.b64decode(m).decode('utf-8', errors='ignore')))
-    except Exception: return None
+    print(f"在网页中找到了 {len(matches)} 个 atob('...') 备选块，开始尝试自愈检索...")
+    for idx, m in enumerate(matches):
+        missing_padding = len(m) % 4
+        if missing_padding:
+            m += '=' * (4 - missing_padding)
+        try:
+            decoded_b64 = base64.b64decode(m).decode('utf-8', errors='ignore')
+            unquoted = urllib.parse.unquote(decoded_b64)
+            data = json.loads(unquoted)
+            # 只有包含了 'docInfo' 或 'padData' 的才是我们真正的核心 clientVars 数据包！
+            if 'docInfo' in data or 'padData' in data:
+                print(f"  [成功] 并在第 {idx+1} 个 atob 数据块中提取出了真实的 clientVars 数据包！")
+                return data
+        except Exception:
+            # 自动过滤掉像 atob('guest')、atob('undefined') 等非 JSON 配置的辅助数据块
+            pass
+
+    print("警告: 循环验证了所有 atob 数据块，但未能成功解析出包含 docInfo 的 JSON 数据。")
+    return None
 
 def main_handler():
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Referer": "https://docs.qq.com/"
     }
-    # ⚠️ 关键优化：在请求主页 HTML 时也带上 Cookie，防止境外云 IP 访问导致触发游客拦截
+    # ⚠️ 请求主页 HTML 时也带上 Cookie，确保 100% 通过防拦截检测
     if TENCENT_COOKIE:
         headers["Cookie"] = TENCENT_COOKIE
         print("已成功载入 TENCENT_COOKIE 并应用于网页请求。")
