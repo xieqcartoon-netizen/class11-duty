@@ -158,9 +158,8 @@ def parse_and_find_duty():
                 break
         print(f"匹配并读取当前月份的工作表: [{sheet_name}]")
 
-        # 直接使用绝对物理坐标（根据探测日志锁定）
-        # 日期在第1列（索引0），家长在第3列（索引2），手机在第4列（索引3）
-        df = pd.read_excel(OUTPUT_FILENAME, sheet_name=sheet_name, header=4) # 从第5行（含列名）开始读
+        # 🌟 终极物理坐标锁定：从第6行（header=5）读取，完全过滤上方说明文字干扰
+        df = pd.read_excel(OUTPUT_FILENAME, sheet_name=sheet_name, header=5)
 
         date_col = df.columns[0]
         parent_col = df.columns[2]
@@ -177,30 +176,27 @@ def parse_and_find_duty():
             str(today.day),
             f"{today.day}号"
         ]
-
         on_duty_parent = "未安排/未登记"
         parent_phone = "暂无联系方式"
-
         for idx, row in df.iterrows():
             raw_date = row[date_col]
             if pd.isna(raw_date):
                 continue
             if isinstance(raw_date, datetime.datetime) or hasattr(raw_date, 'strftime'):
                 row_date_val = raw_date.strftime("%Y-%m-%d")
-            elif isinstance(raw_date, float):
+            elif isinstance(raw_date, float) or isinstance(raw_date, int):
                 try:
+                    # 🌟 恢复为绝对标准的 '1899-12-30'，pandas 原生完美处理 1900 bug
                     row_date_val = pd.to_datetime(raw_date, unit='D', origin='1899-12-30').strftime("%Y-%m-%d")
                 except:
                     row_date_val = str(int(raw_date))
             else:
                 row_date_val = str(raw_date).strip()
-
             matched = False
             for opt in today_formatted_options:
                 if opt == row_date_val or (opt in row_date_val and len(opt) > 2):
                     matched = True
                     break
-
             if matched:
                 on_duty_parent = str(row[parent_col]).strip()
                 parent_phone = str(row[phone_col]).strip()
@@ -210,9 +206,8 @@ def parse_and_find_duty():
                     parent_phone = "暂无联系方式"
                 elif "." in parent_phone:
                     parent_phone = parent_phone.split(".")[0]
-                print(f"✅ 成功定位到本日值班排班 (Row {idx+4}): {row_date_val} | 家长: {on_duty_parent} | 电话: {parent_phone}")
+                print(f"✅ 成功定位到本日值班排班 (Row {idx+7}): {row_date_val} | 家长: {on_duty_parent} | 电话: {parent_phone}")
                 break
-
         return on_duty_parent, parent_phone
     except Exception as e:
         print(f"解析 Excel 失败: {e}")
