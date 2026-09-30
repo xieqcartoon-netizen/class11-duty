@@ -16,7 +16,7 @@ OUTPUT_FILENAME = "temp_duty_sheet.xlsx"
 # ⚠️ 请将下方引号内的文字替换为您从微信测试号获取的真实数据
 APPID = "wxa51aa91318272a31"
 APPSECRET = "bf5a9a751bbb55e67056252918c7b6c6"
-OPENID = "填入您的OpenID"
+OPENID = "o2kfK26g6hXFgHM14r71WduIlosU"
 TEMPLATE_ID = "0sm8dL27YrzvAG607iHs2R-bf42Wf9IQ7ZmsmrFsuM8"
 TENCENT_COOKIE = os.environ.get("TENCENT_COOKIE") # 保持从 Secrets 中读取
 # ==========================================
@@ -46,7 +46,7 @@ def push_to_wechat_official(date_str, parent_name, phone_num):
             "parent": {"value": parent_name, "color": "#ff0000"},
             "phone": {"value": phone_num, "color": "#173177"},
             "remark": {
-                "value": """ ⚠️ 请于 21:00 前到达学校，凭孩子姓名+班级在门卫处登记进校。到校后可在群内报备一声。感谢支持！""",
+                "value": """ ⚠️ 请于 21:00 前到达学校，凭孩子姓名+班级在门卫处登记进校。 到校后可在群内报备一声。感谢支持！""",
                 "color": "#333333"
             }
         }
@@ -58,7 +58,7 @@ def push_to_wechat_official(date_str, parent_name, phone_num):
     except Exception as e:
         print("推送微信时发生异常:", e)
 
-def export_and_download_excel(pad_id):
+def export_and_download_excel():
     """使用 Cookie 调用腾讯官方 API 导出并下载 Excel"""
     if not TENCENT_COOKIE:
         print("错误: 未在 GitHub Secrets 中配置 TENCENT_COOKIE 密钥!")
@@ -71,10 +71,10 @@ def export_and_download_excel(pad_id):
         "Content-Type": "application/json"
     }
 
-    # 步骤 1: 创建导出任务 (使用动态提取的真实 pad_id)
+    # 步骤 1: 创建导出任务 (⚠️ 必须使用简短的 URL ID "DY2Z5dGpBY1p4T0xo")
     export_url = "https://docs.qq.com/v1/export/export_office"
     payload = {
-        "docId": pad_id,  # 🌟 传入 300000000$ 格式的内部ID
+        "docId": "DY2Z5dGpBY1p4T0xo",  # 🌟 关键修复：改回简短的 URL ID
         "version": 2,
         "exportSource": "client",
         "exportType": 0,
@@ -83,7 +83,7 @@ def export_and_download_excel(pad_id):
         }
     }
 
-    print(f"正在向腾讯服务器创建 Excel 导出任务 (padId: {pad_id})...")
+    print("正在向腾讯服务器创建 Excel 导出任务...")
     try:
         resp = requests.post(export_url, json=payload, headers=headers)
         res_json = resp.json()
@@ -258,7 +258,7 @@ def extract_client_vars(html_content):
                 print(f"  [成功] 并在第 {idx+1} 个 atob 数据块中提取出了真实的 clientVars 数据包！")
                 return data
         except Exception:
-            # 自动过滤掉像 atob('guest')、atob('undefined') 等非 JSON 配置的辅助数据块
+            # 自动过滤掉辅助数据块
             pass
 
     print("警告: 循环验证了所有 atob 数据块，但未能成功解析出包含 docInfo 的 JSON 数据。")
@@ -274,7 +274,7 @@ def main_handler():
         headers["Cookie"] = TENCENT_COOKIE
         print("已成功载入 TENCENT_COOKIE 并应用于网页请求。")
     else:
-        print("未检测到配置的 TENCENT_COOKIE 环境变量。")
+        print("未检测到配置 of TENCENT_COOKIE 环境变量。")
 
     # 步骤 1: 获取网页 HTML，并动态解析真实的内部 pad_id
     print("正在获取腾讯文档主页并解析内部 padId...")
@@ -297,8 +297,8 @@ def main_handler():
     pad_id_short = pad_info.get('padId', '')
     pad_id = f"{domain_id}${pad_id_short}" # 真实的内部 padId
 
-    # 步骤 2: 导出并下载 Excel 报表 (传入动态 pad_id)
-    success = export_and_download_excel(pad_id)
+    # 步骤 2: 导出并下载 Excel 报表
+    success = export_and_download_excel()
     if not success:
         print("未能成功导出并获取最新的 Excel 报表。")
         return
