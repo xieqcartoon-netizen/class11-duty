@@ -130,16 +130,8 @@ async def download_via_playwright():
             else:
                 print("未找到 '导出为' 菜单选项。")
         else:
-            print("未找到 '文件' 菜单按钮！启动自动深度诊断程序...")
-            try:
-                buttons = await page.locator("button, [role='button'], .menu_menu-button__1Kokg, .btn").all()
-                for idx, btn in enumerate(buttons[:10]):
-                    b_id = await btn.evaluate("el => el.id")
-                    print(f"      [{idx:02d}] ID: '{b_id}'")
-            except Exception as e:
-                pass
+            print("未找到 '文件' 菜单按钮！")
             await page.screenshot(path="error_screenshot.png")
-            print("  已截取报错瞬间的浏览器物理画面，并保存为: error_screenshot.png")
         await browser.close()
         return False
 def parse_and_find_duty():
@@ -157,6 +149,10 @@ def parse_and_find_duty():
                 sheet_name = name
                 break
         print(f"匹配并读取当前月份的工作表: [{sheet_name}]")
+        df_raw = pd.read_excel(OUTPUT_FILENAME, sheet_name=sheet_name)
+        print("\n🔍 --- 云端 Excel 前 40 行原始内容打印诊断 ---")
+        print(df_raw.head(40).to_string())
+        print("-------------------------------------------\n")
         df = pd.read_excel(OUTPUT_FILENAME, sheet_name=sheet_name, header=2)
         date_col = None
         parent_col = None
