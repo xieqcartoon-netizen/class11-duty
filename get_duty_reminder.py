@@ -58,7 +58,7 @@ def push_to_wechat_official(date_str, parent_name, phone_num):
     except Exception as e:
         print("推送微信时发生异常:", e)
 
-def export_and_download_excel():
+def export_and_download_excel(pad_id):
     """使用 Cookie 调用腾讯官方 API 导出并下载 Excel"""
     if not TENCENT_COOKIE:
         print("错误: 未在 GitHub Secrets 中配置 TENCENT_COOKIE 密钥!")
@@ -71,19 +71,16 @@ def export_and_download_excel():
         "Content-Type": "application/json"
     }
 
-    # 步骤 1: 创建导出任务 (⚠️ 必须使用简短的 URL ID "DY2Z5dGpBY1p4T0xo")
+    # 步骤 1: 创建导出任务 (🌟 已精确定位并修复官方标准 Payload 结构)
     export_url = "https://docs.qq.com/v1/export/export_office"
     payload = {
-        "docId": "DY2Z5dGpBY1p4T0xo",  # 🌟 关键修复：改回简短的 URL ID
-        "version": 2,
+        "docId": pad_id,           # 🌟 必须为 300000000$ 格式的内部ID
+        "version": "2",            # 🌟 必须为字符串 "2"
         "exportSource": "client",
-        "exportType": 0,
-        "switches": {
-            "embedFonts": False
-        }
+        "format": "xlsx"           # 🌟 必填核心参数！必须指定导出格式为 xlsx
     }
 
-    print("正在向腾讯服务器创建 Excel 导出任务...")
+    print(f"正在向腾讯服务器创建 Excel 导出任务 (padId: {pad_id})...")
     try:
         resp = requests.post(export_url, json=payload, headers=headers)
         res_json = resp.json()
@@ -297,8 +294,8 @@ def main_handler():
     pad_id_short = pad_info.get('padId', '')
     pad_id = f"{domain_id}${pad_id_short}" # 真实的内部 padId
 
-    # 步骤 2: 导出并下载 Excel 报表
-    success = export_and_download_excel()
+    # 步骤 2: 导出并下载 Excel 报表 (传入动态 pad_id)
+    success = export_and_download_excel(pad_id) # 🌟 确保这里传入了 pad_id 参数
     if not success:
         print("未能成功导出并获取最新的 Excel 报表。")
         return
