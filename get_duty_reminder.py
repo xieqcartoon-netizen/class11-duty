@@ -43,7 +43,10 @@ def push_to_wechat_official(date_str, parent_name, phone_num):
             "date": {"value": date_str, "color": "#173177"},
             "parent": {"value": parent_name, "color": "#ff0000"},
             "phone": {"value": phone_num, "color": "#173177"},
-            "remark": {"value": "\n⚠️ 请于 21:00 前到达学校，凭孩子姓名+班级在门卫处登记进校。到校后可在群内报备一声。感谢支持！", "color": "#333333"}
+            "remark": {
+                "value": """ ⚠️ 请于 21:00 前到达学校，凭孩子姓名+班级在门卫处登记进校。到校后可在群内报备一声。感谢支持！""",
+                "color": "#333333"
+            }
         }
     }
 
@@ -69,7 +72,7 @@ def export_and_download_excel(pad_id):
     # 步骤 1: 创建导出任务 (⚠️ 使用动态提取的真实 pad_id)
     export_url = "https://docs.qq.com/v1/export/export_office"
     payload = {
-        "docId": pad_id,  # 使用 300000000$ 格式的内部ID
+        "docId": pad_id,  # 传入 300000000$ 格式的内部ID
         "version": 2,
         "exportSource": "client",
         "exportType": 0,
@@ -142,7 +145,7 @@ def parse_and_find_duty():
                 break
 
         print(f"匹配并读取当前月份的工作表: [{sheet_name}]")
-        # 跳过空表头，通常值班表实际内容在第 3 行或第 4 行开始（跳过前 2 行标题）
+        # 跳过空表头，通常值班表内容在第 3 行或第 4 行开始（跳过前 2 行标题）
         df = pd.read_excel(OUTPUT_FILENAME, sheet_name=sheet_name, header=2)
 
         # 自动清洗并定位：日期、值班家长、家长手机号码
@@ -228,7 +231,18 @@ def parse_and_find_duty():
 
 def extract_client_vars(html_content):
     matches = re.findall(r"atob\('([^']+)'\)", html_content)
-    if not matches: return None
+    if not matches:
+        print("未在网页源码中搜索到 atob('...') 数据块。")
+        # 诊断输出：输出网页的长度和前 300 个字符
+        print("网页长度:", len(html_content))
+        print("网页开头预览:\n", html_content[:400])
+        # 检查是否被拦截
+        if "login" in html_content or "登录" in html_content:
+            print("[警告] 页面返回了登录重定向，可能是 Cookie 无效或已过期！")
+        if "slider" in html_content or "验证" in html_content:
+            print("[警告] 页面触发了滑动验证码！")
+        return None
+
     m = matches[0]
     missing_padding = len(m) % 4
     if missing_padding: m += '=' * (4 - missing_padding)
@@ -237,14 +251,23 @@ def extract_client_vars(html_content):
     except Exception: return None
 
 def main_handler():
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": "https://docs.qq.com/"
+    }
+    # ⚠️ 关键优化：在请求主页 HTML 时也带上 Cookie，防止境外云 IP 访问导致触发游客拦截
+    if TENCENT_COOKIE:
+        headers["Cookie"] = TENCENT_COOKIE
+        print("已成功载入 TENCENT_COOKIE 并应用于网页请求。")
+    else:
+        print("未检测到配置的 TENCENT_COOKIE 环境变量。")
 
     # 步骤 1: 获取网页 HTML，并动态解析真实的内部 pad_id
     print("正在获取腾讯文档主页并解析内部 padId...")
     try:
         resp = requests.get(TENCENT_DOC_URL, headers=headers)
         if resp.status_code != 200:
-            print("抓取网页失败！")
+            print(f"抓取网页失败，HTTP 状态码: {resp.status_code}")
             return
         html = resp.text
     except Exception as e:
