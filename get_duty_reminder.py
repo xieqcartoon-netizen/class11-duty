@@ -6,15 +6,15 @@ import os
 
 # --- 配置区 ---
 TENCENT_DOC_URL = "https://docs.qq.com/sheet/DY2Z5dGpBY1p4T0xo"
-DOC_ID = "DY2Z5dGpBY1p4T0xo"
 OUTPUT_FILENAME = "temp_duty_sheet.xlsx"
 
-# 从 GitHub Secrets 中安全读取所有凭证和 Cookie
-APPID = os.environ.get("WECHAT_APPID")
-APPSECRET = os.environ.get("WECHAT_APPSECRET")
-OPENID = os.environ.get("WECHAT_OPENID")
-TEMPLATE_ID = os.environ.get("WECHAT_TEMPLATE_ID")
-TENCENT_COOKIE = os.environ.get("TENCENT_COOKIE")
+# 请将下方引号内的文字替换为您从微信测试号获取的真实数据
+APPID = "wxa51aa91318272a31"
+APPSECRET = "bf5a9a751bbb55e67056252918c7b6c6"
+OPENID = "o2kfK26g6hXFgHM14r71WduIlosU"
+TEMPLATE_ID = "0sm8dL27YrzvAG607iHs2R-bf42Wf9IQ7ZmsmrFsuM8"
+TENCENT_COOKIE = os.environ.get("TENCENT_COOKIE") # 保持从 Secrets 中读取
+# ==========================================
 
 def get_wechat_access_token():
     url = f"https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid={APPID}&secret={APPSECRET}"
@@ -51,10 +51,10 @@ def push_to_wechat_official(date_str, parent_name, phone_num):
     except Exception as e:
         print("推送微信时发生异常:", e)
 
-def export_and_download_excel():
+def export_and_download_excel(pad_id):
     """使用 Cookie 调用腾讯官方 API 导出并下载 Excel"""
     if not TENCENT_COOKIE:
-        print("错误: 未配置 TENCENT_COOKIE 密钥!")
+        print("错误: 未在 GitHub Secrets 中配置 TENCENT_COOKIE 密钥!")
         return False
 
     headers = {
@@ -64,10 +64,10 @@ def export_and_download_excel():
         "Content-Type": "application/json"
     }
 
-    # 步骤 1: 创建导出任务
+    # 步骤 1: 创建导出任务 (⚠️ 已修复：使用动态提取的真实 pad_id)
     export_url = "https://docs.qq.com/v1/export/export_office"
     payload = {
-        "docId": DOC_ID,
+        "docId": pad_id,  # 🌟 关键修复：传入 300000000$ 格式的内部ID
         "version": 2,
         "exportSource": "client",
         "exportType": 0,
@@ -76,7 +76,7 @@ def export_and_download_excel():
         }
     }
 
-    print("正在向腾讯服务器创建 Excel 导出任务...")
+    print(f"正在向腾讯服务器创建 Excel 导出任务 (padId: {pad_id})...")
     try:
         resp = requests.post(export_url, json=payload, headers=headers)
         res_json = resp.json()
@@ -148,7 +148,7 @@ def parse_and_find_duty():
         parent_col = None
         phone_col = None
 
-        # 遍历前 4 列，定位字段名
+        # 遍历前 5 列，定位列字段
         for col in df.columns[:5]:
             col_str = str(col).strip()
             # 扫描这一列的前几行，查找关键字
@@ -189,6 +189,12 @@ def parse_and_find_duty():
             # 处理 pandas 读入标准日期产生的 Timestamp 格式
             if isinstance(raw_date, datetime.datetime) or hasattr(raw_date, 'strftime'):
                 row_date_val = raw_date.strftime("%Y-%m-%d")
+            elif isinstance(raw_date, float):
+                # Excel 浮点型日期转换
+                try:
+                    row_date_val = pd.to_datetime(raw_date, unit='D', origin='1899-12-30').strftime("%Y-%m-%d")
+                except:
+                    row_date_val = str(int(raw_date))
             else:
                 row_date_val = str(raw_date).strip()
 
@@ -209,7 +215,7 @@ def parse_and_find_duty():
                 if parent_phone == "nan" or not parent_phone:
                     parent_phone = "暂无联系方式"
 
-                print(f"✅ 成功定位到本日值班排班 (Row {idx+3}): {row_date_val} | 家长: {on_duty_parent} | 电话: {parent_phone}")
+                print(f"✅ 成功定位到本日值班排班 (Row {idx+4}): {row_date_val} | 家长: {on_duty_parent} | 电话: {parent_phone}")
                 break
 
         return on_duty_parent, parent_phone
@@ -218,14 +224,47 @@ def parse_and_find_duty():
         print(f"解析 Excel 失败: {e}")
         return None, None
 
+def extract_client_vars(html_content):
+    matches = re.findall(r"atob\('([^']+)'\)", html_content)
+    if not matches: return None
+    m = matches[0]
+    missing_padding = len(m) % 4
+    if missing_padding: m += '=' * (4 - missing_padding)
+    try:
+        return json.loads(urllib.parse.unquote(base64.b64decode(m).decode('utf-8', errors='ignore')))
+    except Exception: return None
+
 def main_handler():
-    # 1. 导出并下载 Excel 报表
-    success = export_and_download_excel()
-    if not success:
-        print("未能成功获取 Excel 报表。")
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+    # 步骤 1: 获取网页 HTML，并动态解析真实的内部 pad_id
+    print("正在获取腾讯文档主页并解析内部 padId...")
+    try:
+        resp = requests.get(TENCENT_DOC_URL, headers=headers)
+        if resp.status_code != 200:
+            print("抓取网页失败！")
+            return
+        html = resp.text
+    except Exception as e:
+        print(f"请求网页失败: {e}"); return
+
+    client_vars = extract_client_vars(html)
+    if not client_vars:
+        print("解析 clientVars 失败，请确保 Cookie 或网络连接正常。")
         return
 
-    # 2. 精确解析
+    pad_info = client_vars.get('docInfo', {}).get('padInfo', {})
+    domain_id = pad_info.get('domainId', '300000000')
+    pad_id_short = pad_info.get('padId', '')
+    pad_id = f"{domain_id}${pad_id_short}" # 这才是最真实的内部 padId！
+
+    # 步骤 2: 导出并下载 Excel 报表 (传入动态 pad_id)
+    success = export_and_download_excel(pad_id)
+    if not success:
+        print("未能成功导出并获取最新的 Excel 报表。")
+        return
+
+    # 步骤 3: 精确解析
     parent_name, phone_num = parse_and_find_duty()
     if parent_name is None:
         return
@@ -233,7 +272,7 @@ def main_handler():
     today = datetime.date.today()
     date_formatted = f"{today.strftime('%Y-%m-%d')} (周{['一','二','三','四','五','六','日'][today.weekday()]})"
 
-    # 3. 官方安全通道推送
+    # 步骤 4: 官方安全通道推送
     push_to_wechat_official(date_formatted, parent_name, phone_num)
 
 if __name__ == '__main__':
