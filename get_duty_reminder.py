@@ -44,8 +44,7 @@ def push_to_wechat_official(date_str, parent_name, phone_num):
             "date": {"value": date_str, "color": "#173177"},
             "parent": {"value": parent_name, "color": "#ff0000"},
             "phone": {"value": phone_num, "color": "#173177"},
-            "remark": {"value": "\n⚠️ 请于 21:00
-     前到达学校，凭孩子姓名+班级在门卫处登记进校。到校后可在群内报备一声。感谢支持！", "color": "#333333"}
+            "remark": {"value": "\n⚠️ 请于 21:00 前到达学校，凭孩子姓名+班级在门卫处登记进校。到校后可在群内报备一声。感谢支持！", "color": "#333333"}
         }
     }
 
