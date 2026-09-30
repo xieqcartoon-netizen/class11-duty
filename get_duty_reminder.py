@@ -71,13 +71,13 @@ def export_and_download_excel(pad_id):
         "Content-Type": "application/json"
     }
 
-    # 步骤 1: 创建导出任务 (🌟 已精确定位并修复官方标准 Payload 结构)
+    # 步骤 1: 创建导出任务 (⚠️ 使用动态提取的真实 pad_id)
     export_url = "https://docs.qq.com/v1/export/export_office"
     payload = {
-        "docId": pad_id,           # 🌟 必须为 300000000$ 格式的内部ID
-        "version": "2",            # 🌟 必须为字符串 "2"
+        "docId": pad_id,           # 传入 300000000$ 格式的内部ID
+        "version": "2",            # 必须为字符串 "2"
         "exportSource": "client",
-        "format": "xlsx"           # 🌟 必填核心参数！必须指定导出格式为 xlsx
+        "format": "xlsx"           # 必填核心参数！必须指定导出格式为 xlsx
     }
 
     print(f"正在向腾讯服务器创建 Excel 导出任务 (padId: {pad_id})...")
@@ -85,7 +85,8 @@ def export_and_download_excel(pad_id):
         resp = requests.post(export_url, json=payload, headers=headers)
         res_json = resp.json()
         if res_json.get("ret") != 0:
-            print(f"导出失败: {res_json.get('msg')}")
+            # 🌟 关键增强：如果失败，打印出完整的 JSON 响应和状态码，方便精准诊断参数或权限问题！
+            print(f"导出失败! 状态码: {resp.status_code} | 完整 JSON 响应: {res_json}")
             return False
         operation_id = res_json.get("operationId")
     except Exception as e:
@@ -144,7 +145,7 @@ def parse_and_find_duty():
                 break
 
         print(f"匹配并读取当前月份的工作表: [{sheet_name}]")
-        # 跳过空表头，通常值班表实际内容在第 3 行或第 4 行开始（跳过前 2 行标题）
+        # 跳过空表头，通常值班表内容在第 3 行或第 4 行开始（跳过前 2 行标题）
         df = pd.read_excel(OUTPUT_FILENAME, sheet_name=sheet_name, header=2)
 
         # 自动清洗并定位：日期、值班家长、家长手机号码
@@ -271,7 +272,7 @@ def main_handler():
         headers["Cookie"] = TENCENT_COOKIE
         print("已成功载入 TENCENT_COOKIE 并应用于网页请求。")
     else:
-        print("未检测到配置 of TENCENT_COOKIE 环境变量。")
+        print("未检测到配置的 TENCENT_COOKIE 环境变量。")
 
     # 步骤 1: 获取网页 HTML，并动态解析真实的内部 pad_id
     print("正在获取腾讯文档主页并解析内部 padId...")
@@ -295,7 +296,7 @@ def main_handler():
     pad_id = f"{domain_id}${pad_id_short}" # 真实的内部 padId
 
     # 步骤 2: 导出并下载 Excel 报表 (传入动态 pad_id)
-    success = export_and_download_excel(pad_id) # 🌟 确保这里传入了 pad_id 参数
+    success = export_and_download_excel(pad_id)
     if not success:
         print("未能成功导出并获取最新的 Excel 报表。")
         return
