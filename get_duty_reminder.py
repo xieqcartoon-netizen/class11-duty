@@ -64,9 +64,16 @@ async def download_via_playwright():
     async with async_playwright() as p:
         print("1. 正在启动 Headless Chromium 浏览器...")
         browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context()
 
-        # 解析 Cookie 并安全注入到隔离的浏览器上下文中
+        # 🌟 关键修复：设置标准的桌面分辨率、真实的浏览器 User-Agent 以及 zh-CN 语言环境！
+        # 避免腾讯文档由于环境指纹（如分辨率过小）判定为手机端，从而隐藏“文件”菜单或触发防爬重定向！
+        context = await browser.new_context(
+            viewport={"width": 1920, "height": 1080},
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            locale="zh-CN"
+        )
+
+        # 解析 Cookie 并安全注入
         cookies = []
         for item in TENCENT_COOKIE.split(";"):
             item = item.strip()
@@ -85,28 +92,36 @@ async def download_via_playwright():
         print("2. 正在加载腾讯文档页面...")
         await page.goto(TENCENT_DOC_URL, wait_until="domcontentloaded")
 
+        # 打印当前实际跳转的 URL
+        print(f"  当前浏览器 URL: {page.url}")
+
         print("  正在等待腾讯云端渲染 Canvas 画布...")
-        await page.wait_for_timeout(6000)
+        await page.wait_for_timeout(8000) # 给画布和菜单多 2 秒加载缓冲时间
 
         print("3. 正在定位顶部 '文件(File)' 菜单并展开...")
-        # 兼容浏览器多语言（中/英）环境
-        file_menu = page.locator("text=文件").first or page.locator("text=File").first or page.locator("#header-file-menu-btn").first
+        # 优先使用官方标准的桌面文件菜单 css selector，再辅以文本匹配
+        file_menu = page.locator("#header-file-menu-btn").first
+        if await file_menu.count() == 0:
+            file_menu = page.locator("text=文件").first
+
         if await file_menu.count() > 0:
+            print("  找到了 '文件' 菜单，正在点击...")
             await file_menu.click()
-            await page.wait_for_timeout(1500)
+            await page.wait_for_timeout(2000)
 
             print("4. 正在定位二级菜单 '导出为' 悬停展开...")
-            export_menu = page.locator("text=导出为").first or page.locator("text=Export").first
+            export_menu = page.locator("text=导出为").first
             if await export_menu.count() > 0:
+                print("  找到了 '导出为'，正在悬停展开...")
                 await export_menu.hover()
-                await page.wait_for_timeout(1500)
+                await page.wait_for_timeout(2000)
 
                 print("5. 正在定位 '本地 Excel 表格' 下载选项...")
-                excel_option = page.locator("text=本地 Excel").first or page.locator("text=Local Excel").first or page.locator("text=Excel").first
+                excel_option = page.locator("text=本地 Excel").first
                 if await excel_option.count() > 0:
                     print("  [触发下载] 正在生成并下载 Excel 流...")
                     try:
-                        async with page.expect_download(timeout=15000) as download_info:
+                        async with page.expect_download(timeout=20000) as download_info:
                             await excel_option.click()
                         download = await download_info.value
                         await download.save_as(OUTPUT_FILENAME)
@@ -120,7 +135,10 @@ async def download_via_playwright():
             else:
                 print("未找到 '导出为' 菜单选项。")
         else:
-            print("未找到 '文件' 菜单按钮，页面可能加载失败或 Cookie 已过期！")
+            print("未找到 '文件' 菜单按钮！")
+            # 🌟 终极自愈诊断：保存报错瞬间的屏幕截图，方便一眼看清到底是 Cookie 过期重定向了，还是触发了验证码！
+            await page.screenshot(path="error_screenshot.png")
+            print("已截取报错瞬间的浏览器画面，并保存为: error_screenshot.png")
 
         await browser.close()
         return False
