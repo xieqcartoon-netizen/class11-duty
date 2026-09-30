@@ -20,8 +20,7 @@ TENCENT_COOKIE = os.environ.get("TENCENT_COOKIE") # 保持从 Secrets 中读取
 # ==========================================
 
 def get_wechat_access_token():
-    url =
-f"https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid={APPID}&secret={APPSECRET}"
+    url = f"https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid={APPID}&secret={APPSECRET}"
     try:
         resp = requests.get(url)
         return resp.json().get("access_token")
