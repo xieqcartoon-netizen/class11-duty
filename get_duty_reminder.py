@@ -59,7 +59,7 @@ def push_to_wechat_official(date_str, parent_name, phone_num):
         print("推送微信时发生异常:", e)
 
 def export_and_download_excel(pad_id):
-    """使用 Cookie 调用腾讯官方 API 导出并下载 Excel"""
+    """使用 Cookie 调用腾讯官方 API 导出并下载 Excel (带4路自适应重试机制)"""
     if not TENCENT_COOKIE:
         print("错误: 未在 GitHub Secrets 中配置 TENCENT_COOKIE 密钥!")
         return False
@@ -71,26 +71,69 @@ def export_and_download_excel(pad_id):
         "Content-Type": "application/json"
     }
 
-    # 步骤 1: 创建导出任务 (⚠️ 使用动态提取的真实 pad_id)
     export_url = "https://docs.qq.com/v1/export/export_office"
-    payload = {
-        "docId": pad_id,           # 传入 300000000$ 格式的内部ID
-        "version": "2",            # 必须为字符串 "2"
-        "exportSource": "client",
-        "format": "xlsx"           # 必填核心参数！必须指定导出格式为 xlsx
-    }
 
-    print(f"正在向腾讯服务器创建 Excel 导出任务 (padId: {pad_id})...")
-    try:
-        resp = requests.post(export_url, json=payload, headers=headers)
-        res_json = resp.json()
-        if res_json.get("ret") != 0:
-            # 🌟 关键增强：如果失败，打印出完整的 JSON 响应和状态码，方便精准诊断参数或权限问题！
-            print(f"导出失败! 状态码: {resp.status_code} | 完整 JSON 响应: {res_json}")
-            return False
-        operation_id = res_json.get("operationId")
-    except Exception as e:
-        print(f"请求导出接口失败: {e}")
+    # 🌟 4种可能通过校验的 Payload 载荷变体组合列表
+    payloads = [
+        # 方案 1: 长 ID + 纯净版参数
+        {
+            "docId": pad_id,
+            "version": "2",
+            "exportSource": "client",
+            "format": "xlsx"
+        },
+        # 方案 2: 短 ID + 纯净版参数
+        {
+            "docId": "DY2Z5dGpBY1p4T0xo",
+            "version": "2",
+            "exportSource": "client",
+            "format": "xlsx"
+        },
+        # 方案 3: 长 ID + 带有 client 属性的全量参数 (CSDN 常见款)
+        {
+            "docId": pad_id,
+            "version": "2",
+            "exportSource": "client",
+            "format": "xlsx",
+            "exportType": 0,
+            "switches": {
+                "embedFonts": False
+            }
+        },
+        # 方案 4: 短 ID + 带有 client 属性的全量参数
+        {
+            "docId": "DY2Z5dGpBY1p4T0xo",
+            "version": "2",
+            "exportSource": "client",
+            "format": "xlsx",
+            "exportType": 0,
+            "switches": {
+                "embedFonts": False
+            }
+        }
+    ]
+
+    operation_id = None
+    success_payload_idx = -1
+
+    # 自动循环重试，直到其中一种方案在腾讯服务器上创建任务成功！
+    for idx, payload in enumerate(payloads):
+        print(f"正在尝试导出载荷方案 [{idx + 1}] (docId: {payload['docId']})...")
+        try:
+            resp = requests.post(export_url, json=payload, headers=headers)
+            res_json = resp.json()
+            if res_json.get("ret") == 0:
+                operation_id = res_json.get("operationId")
+                success_payload_idx = idx
+                print(f"  [成功] 方案 [{idx + 1}] 成功创建云端导出任务！Operation ID: {operation_id}")
+                break
+            else:
+                print(f"  [失败] 方案 [{idx + 1}] 返回 ret: {res_json.get('ret')}, msg: {res_json.get('msg')}")
+        except Exception as e:
+            print(f"  [异常] 方案 [{idx + 1}] 请求接口出错: {e}")
+
+    if not operation_id:
+        print("错误: 所有 4 种导出载荷方案均尝试失败，无法创建导出任务。")
         return False
 
     # 步骤 2: 轮询任务进度
@@ -145,7 +188,7 @@ def parse_and_find_duty():
                 break
 
         print(f"匹配并读取当前月份的工作表: [{sheet_name}]")
-        # 跳过空表头，通常值班表内容在第 3 行或第 4 行开始（跳过前 2 行标题）
+        # 跳过空表头，通常值班表实际内容在第 3 行或第 4 行开始（跳过前 2 行标题）
         df = pd.read_excel(OUTPUT_FILENAME, sheet_name=sheet_name, header=2)
 
         # 自动清洗并定位：日期、值班家长、家长手机号码
