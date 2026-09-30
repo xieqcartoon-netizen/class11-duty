@@ -2,32 +2,33 @@ name: Daily Duty Reminder
 
 on:
   schedule:
-    # 北京时间每天早上 8:00 自动运行
+    # 每天北京时间早上 8:00 (UTC 时间 0:00) 自动触发
     - cron: '0 0 * * *'
-  workflow_dispatch:
+  workflow_dispatch: # 保持开启，支持随时手动点击运行
 
 jobs:
   run-reminder:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4 # 升级到 v4，彻底消除 Node.js 警告
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5 # 升级到 v5，彻底消除 Node.js 警告
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          cache: 'pip'
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas openpyxl requests
+          pip install playwright pandas openpyxl requests
 
-      - name: Run script
+      - name: Install Playwright Chromium Browser
+        run: python -m playwright install chromium
+
+      - name: Run Duty Reminder Script
         env:
-          WECHAT_APPID: ${{ secrets.WECHAT_APPID }}
-          WECHAT_APPSECRET: ${{ secrets.WECHAT_APPSECRET }}
-          WECHAT_OPENID: ${{ secrets.WECHAT_OPENID }}
-          WECHAT_TEMPLATE_ID: ${{ secrets.WECHAT_TEMPLATE_ID }} # 完美修复对齐偏差
           TENCENT_COOKIE: ${{ secrets.TENCENT_COOKIE }}
         run: python get_duty_reminder.py
