@@ -3,12 +3,15 @@ import requests
 import pandas as pd
 import datetime
 import os
+import re
+import urllib.parse
+import json
 
 # --- 配置区 ---
 TENCENT_DOC_URL = "https://docs.qq.com/sheet/DY2Z5dGpBY1p4T0xo"
 OUTPUT_FILENAME = "temp_duty_sheet.xlsx"
 
-# 请将下方引号内的文字替换为您从微信测试号获取的真实数据
+# ⚠️ 请将下方引号内的文字替换为您从微信测试号获取的真实数据
 APPID = "wxa51aa91318272a31"
 APPSECRET = "bf5a9a751bbb55e67056252918c7b6c6"
 OPENID = "o2kfK26g6hXFgHM14r71WduIlosU"
@@ -17,7 +20,8 @@ TENCENT_COOKIE = os.environ.get("TENCENT_COOKIE") # 保持从 Secrets 中读取
 # ==========================================
 
 def get_wechat_access_token():
-    url = f"https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid={APPID}&secret={APPSECRET}"
+    url =
+f"https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid={APPID}&secret={APPSECRET}"
     try:
         resp = requests.get(url)
         return resp.json().get("access_token")
@@ -40,8 +44,8 @@ def push_to_wechat_official(date_str, parent_name, phone_num):
             "date": {"value": date_str, "color": "#173177"},
             "parent": {"value": parent_name, "color": "#ff0000"},
             "phone": {"value": phone_num, "color": "#173177"},
-            "remark": {"value": "\n⚠️ 请于 21:00 前到达学校，凭孩子姓名+班级在门卫处登记进校。\n到校后可在群内报备一声。感谢支持！", "color":
-"#333333"}
+            "remark": {"value": "\n⚠️ 请于 21:00
+前到达学校，凭孩子姓名+班级在门卫处登记进校。\n到校后可在群内报备一声。感谢支持！", "color": "#333333"}
         }
     }
 
@@ -64,10 +68,10 @@ def export_and_download_excel(pad_id):
         "Content-Type": "application/json"
     }
 
-    # 步骤 1: 创建导出任务 (⚠️ 已修复：使用动态提取的真实 pad_id)
+    # 步骤 1: 创建导出任务 (⚠️ 使用动态提取的真实 pad_id)
     export_url = "https://docs.qq.com/v1/export/export_office"
     payload = {
-        "docId": pad_id,  # 🌟 关键修复：传入 300000000$ 格式的内部ID
+        "docId": pad_id,  # 使用 300000000$ 格式的内部ID
         "version": 2,
         "exportSource": "client",
         "exportType": 0,
@@ -186,7 +190,7 @@ def parse_and_find_duty():
             if pd.isna(raw_date):
                 continue
 
-            # 处理 pandas 读入标准日期产生的 Timestamp 格式
+            # 处理 pandas 读入 standard 日期产生的 Timestamp 格式
             if isinstance(raw_date, datetime.datetime) or hasattr(raw_date, 'strftime'):
                 row_date_val = raw_date.strftime("%Y-%m-%d")
             elif isinstance(raw_date, float):
@@ -215,7 +219,8 @@ def parse_and_find_duty():
                 if parent_phone == "nan" or not parent_phone:
                     parent_phone = "暂无联系方式"
 
-                print(f"✅ 成功定位到本日值班排班 (Row {idx+4}): {row_date_val} | 家长: {on_duty_parent} | 电话: {parent_phone}")
+                print(f"✅ 成功定位到本日值班排班 (Row {idx+4}): {row_date_val} | 家长: {on_duty_parent} | 电话:
+{parent_phone}")
                 break
 
         return on_duty_parent, parent_phone
@@ -256,7 +261,7 @@ def main_handler():
     pad_info = client_vars.get('docInfo', {}).get('padInfo', {})
     domain_id = pad_info.get('domainId', '300000000')
     pad_id_short = pad_info.get('padId', '')
-    pad_id = f"{domain_id}${pad_id_short}" # 这才是最真实的内部 padId！
+    pad_id = f"{domain_id}${pad_id_short}" # 真实的内部 padId
 
     # 步骤 2: 导出并下载 Excel 报表 (传入动态 pad_id)
     success = export_and_download_excel(pad_id)
