@@ -130,8 +130,16 @@ async def download_via_playwright():
             else:
                 print("未找到 '导出为' 菜单选项。")
         else:
-            print("未找到 '文件' 菜单按钮！")
+            print("未找到 '文件' 菜单按钮！启动自动深度诊断程序...")
+            try:
+                buttons = await page.locator("button, [role='button'], .menu_menu-button__1Kokg, .btn").all()
+                for idx, btn in enumerate(buttons[:10]):
+                    b_id = await btn.evaluate("el => el.id")
+                    print(f"      [{idx:02d}] ID: '{b_id}'")
+            except Exception as e:
+                pass
             await page.screenshot(path="error_screenshot.png")
+            print("  已截取报错瞬间的浏览器物理画面，并保存为: error_screenshot.png")
         await browser.close()
         return False
 def parse_and_find_duty():
@@ -149,27 +157,17 @@ def parse_and_find_duty():
                 sheet_name = name
                 break
         print(f"匹配并读取当前月份的工作表: [{sheet_name}]")
-        df_raw = pd.read_excel(OUTPUT_FILENAME, sheet_name=sheet_name)
-        print("\n🔍 --- 云端 Excel 前 40 行原始内容打印诊断 ---")
-        print(df_raw.head(40).to_string())
-        print("-------------------------------------------\n")
-        df = pd.read_excel(OUTPUT_FILENAME, sheet_name=sheet_name, header=2)
-        date_col = None
-        parent_col = None
-        phone_col = None
-        for col in df.columns[:5]:
-            col_str = str(col).strip()
-            row_samples = df[col].head(4).astype(str).tolist()
-            if any("日期" in r or "星期" in r for r in row_samples) or "日期" in col_str:
-                if date_col is None: date_col = col
-            if any("家长" in r or "值班" in r for r in row_samples) or "家长" in col_str:
-                parent_col = col
-            if any("手机" in r or "号码" in r or "联系" in r for r in row_samples) or "手机" in col_str:
-                phone_col = col
-        if date_col is None: date_col = df.columns[0]
-        if parent_col is None: parent_col = df.columns[2]
-        if phone_col is None: phone_col = df.columns[3]
-        print(f"🎯 精准定位列 -> 日期列: '{date_col}' | 值班家长列: '{parent_col}' | 手机列: '{phone_col}'")
+
+        # 直接使用绝对物理坐标（根据探测日志锁定）
+        # 日期在第1列（索引0），家长在第3列（索引2），手机在第4列（索引3）
+        df = pd.read_excel(OUTPUT_FILENAME, sheet_name=sheet_name, header=4) # 从第5行（含列名）开始读
+
+        date_col = df.columns[0]
+        parent_col = df.columns[2]
+        phone_col = df.columns[3]
+
+        print(f"🎯 物理锁定坐标 -> 日期列: '{date_col}' | 值班家长列: '{parent_col}' | 手机列: '{phone_col}'")
+
         today_formatted_options = [
             today.strftime("%Y-%m-%d"),
             today.strftime("%Y/%m/%d"),
@@ -179,8 +177,10 @@ def parse_and_find_duty():
             str(today.day),
             f"{today.day}号"
         ]
+
         on_duty_parent = "未安排/未登记"
         parent_phone = "暂无联系方式"
+
         for idx, row in df.iterrows():
             raw_date = row[date_col]
             if pd.isna(raw_date):
@@ -194,11 +194,13 @@ def parse_and_find_duty():
                     row_date_val = str(int(raw_date))
             else:
                 row_date_val = str(raw_date).strip()
+
             matched = False
             for opt in today_formatted_options:
                 if opt == row_date_val or (opt in row_date_val and len(opt) > 2):
                     matched = True
                     break
+
             if matched:
                 on_duty_parent = str(row[parent_col]).strip()
                 parent_phone = str(row[phone_col]).strip()
@@ -210,6 +212,7 @@ def parse_and_find_duty():
                     parent_phone = parent_phone.split(".")[0]
                 print(f"✅ 成功定位到本日值班排班 (Row {idx+4}): {row_date_val} | 家长: {on_duty_parent} | 电话: {parent_phone}")
                 break
+
         return on_duty_parent, parent_phone
     except Exception as e:
         print(f"解析 Excel 失败: {e}")
