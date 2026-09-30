@@ -1,22 +1,21 @@
-import time
-import requests
+import asyncio
+from playwright.async_api import async_playwright
+import pandas as pd
 import datetime
 import os
+import requests
 import re
-import urllib.parse
-import json
-import base64
-import zlib
-import struct
 
 # --- 配置区 ---
 TENCENT_DOC_URL = "https://docs.qq.com/sheet/DY2Z5dGpBY1p4T0xo"
+OUTPUT_FILENAME = "temp_duty_sheet.xlsx"
 
 # ⚠️ 请将下方引号内的文字替换为您从微信测试号获取的真实数据
 APPID = "wxa51aa91318272a31"
 APPSECRET = "bf5a9a751bbb55e67056252918c7b6c6"
 OPENID = "o2kfK26g6hXFgHM14r71WduIlosU"
 TEMPLATE_ID = "0sm8dL27YrzvAG607iHs2R-bf42Wf9IQ7ZmsmrFsuM8"
+TENCENT_COOKIE = os.environ.get("TENCENT_COOKIE") # 从 GitHub Secrets 中读取
 # ==========================================
 
 def get_wechat_access_token():
@@ -56,232 +55,198 @@ def push_to_wechat_official(date_str, parent_name, phone_num):
     except Exception as e:
         print("推送微信时发生异常:", e)
 
-def extract_client_vars(html_content):
-    # 自愈搜索：匹配出包含 docInfo 和 padData 的正确 atob 加密块
-    matches = re.findall(r"atob\('([^']+)'\)", html_content)
-    if not matches:
-        print("未在网页源码中搜索到 atob('...') 数据块。")
-        return None
+async def download_via_playwright():
+    """使用 Playwright 注入 Cookie 并模拟点击菜单下载 Excel"""
+    if not TENCENT_COOKIE:
+        print("错误: 未在 GitHub Secrets 中配置 TENCENT_COOKIE 密钥!")
+        return False
 
-    for idx, m in enumerate(matches):
-        missing_padding = len(m) % 4
-        if missing_padding:
-            m += '=' * (4 - missing_padding)
-        try:
-            decoded_b64 = base64.b64decode(m).decode('utf-8', errors='ignore')
-            unquoted = urllib.parse.unquote(decoded_b64)
-            data = json.loads(unquoted)
-            if 'docInfo' in data or 'padData' in data:
-                return data
-        except Exception:
-            pass
-    return None
+    async with async_playwright() as p:
+        print("1. 正在启动 Headless Chromium 浏览器...")
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context()
 
-def extract_strings_from_related_sheet(compressed_sheet_b64):
-    decoded_b64 = base64.b64decode(compressed_sheet_b64)
-    decompressed = zlib.decompress(decoded_b64)
+        # 解析 Cookie 并安全注入到隔离的浏览器上下文中
+        cookies = []
+        for item in TENCENT_COOKIE.split(";"):
+            item = item.strip()
+            if "=" in item:
+                name, value = item.split("=", 1)
+                cookies.append({
+                    "name": name,
+                    "value": value,
+                    "domain": ".qq.com",
+                    "path": "/"
+                })
+        await context.add_cookies(cookies)
+        print(f"  已成功注入 {len(cookies)} 个腾讯会话 Cookie 认证密钥。")
 
-    current_str = []
-    strings = []
-    for idx, b in enumerate(decompressed):
-        is_printable = (32 <= b <= 126) or (0xe4 <= b <= 0xe9) or (0x80 <= b <= 0xbf)
-        if is_printable:
-            current_str.append(b)
+        page = await context.new_page()
+        print("2. 正在加载腾讯文档页面...")
+        await page.goto(TENCENT_DOC_URL, wait_until="domcontentloaded")
+
+        print("  正在等待腾讯云端渲染 Canvas 画布...")
+        await page.wait_for_timeout(6000)
+
+        print("3. 正在定位顶部 '文件(File)' 菜单并展开...")
+        # 兼容浏览器多语言（中/英）环境
+        file_menu = page.locator("text=文件").first or page.locator("text=File").first or page.locator("#header-file-menu-btn").first
+        if await file_menu.count() > 0:
+            await file_menu.click()
+            await page.wait_for_timeout(1500)
+
+            print("4. 正在定位二级菜单 '导出为' 悬停展开...")
+            export_menu = page.locator("text=导出为").first or page.locator("text=Export").first
+            if await export_menu.count() > 0:
+                await export_menu.hover()
+                await page.wait_for_timeout(1500)
+
+                print("5. 正在定位 '本地 Excel 表格' 下载选项...")
+                excel_option = page.locator("text=本地 Excel").first or page.locator("text=Local Excel").first or page.locator("text=Excel").first
+                if await excel_option.count() > 0:
+                    print("  [触发下载] 正在生成并下载 Excel 流...")
+                    try:
+                        async with page.expect_download(timeout=15000) as download_info:
+                            await excel_option.click()
+                        download = await download_info.value
+                        await download.save_as(OUTPUT_FILENAME)
+                        print(f"🎉 成功! 精准数据已完美下载到云端环境: {OUTPUT_FILENAME}")
+                        await browser.close()
+                        return True
+                    except Exception as ex:
+                        print(f"点击下载或保存文件时发生异常: {ex}")
+                else:
+                    print("未找到 '本地 Excel' 选项。")
+            else:
+                print("未找到 '导出为' 菜单选项。")
         else:
-            if len(current_str) >= 2:
+            print("未找到 '文件' 菜单按钮，页面可能加载失败或 Cookie 已过期！")
+
+        await browser.close()
+        return False
+
+def parse_and_find_duty():
+    """使用 pandas 精准解析导出的 Excel 并匹配值班家长"""
+    if not os.path.exists(OUTPUT_FILENAME):
+        print("错误: 未找到本地下载的 Excel 表格文件!")
+        return None, None
+
+    try:
+        xl = pd.ExcelFile(OUTPUT_FILENAME)
+        sheet_name = xl.sheet_names[0]
+
+        # 寻找当前月份的工作表 (例如 9月值班表)
+        today = datetime.date.today()
+        current_month_str = f"{today.month}月"
+        for name in xl.sheet_names:
+            if current_month_str in name:
+                sheet_name = name
+                break
+
+        print(f"匹配并读取当前月份的工作表: [{sheet_name}]")
+        # 跳过空表头，通常值班表实际内容在第 3 行或第 4 行开始（跳过前 2 行标题）
+        df = pd.read_excel(OUTPUT_FILENAME, sheet_name=sheet_name, header=2)
+
+        # 自动清洗并定位：日期、值班家长、家长手机号码
+        date_col = None
+        parent_col = None
+        phone_col = None
+
+        # 遍历前 5 列，定位列字段
+        for col in df.columns[:5]:
+            col_str = str(col).strip()
+            # 扫描这一列的前几行，查找关键字
+            row_samples = df[col].head(4).astype(str).tolist()
+            if any("日期" in r or "星期" in r for r in row_samples) or "日期" in col_str:
+                if date_col is None: date_col = col
+            if any("家长" in r or "值班" in r for r in row_samples) or "家长" in col_str:
+                parent_col = col
+            if any("手机" in r or "号码" in r or "联系" in r for r in row_samples) or "手机" in col_str:
+                phone_col = col
+
+        # 降级容错备用：如果未自动定位成功，使用前 4 列
+        if date_col is None: date_col = df.columns[0]
+        if parent_col is None: parent_col = df.columns[2]
+        if phone_col is None: phone_col = df.columns[3]
+
+        print(f"🎯 精准定位列 -> 日期列: '{date_col}' | 值班家长列: '{parent_col}' | 手机列: '{phone_col}'")
+
+        # 准备今天日期的多格式匹配方案
+        today_formatted_options = [
+            today.strftime("%Y-%m-%d"),
+            today.strftime("%Y/%m/%d"),
+            f"{today.month}/{today.day}",
+            f"{today.month}月{today.day}日",
+            f"{today.month}月{today.day}",
+            str(today.day), # 单数字如 28
+            f"{today.day}号"
+        ]
+
+        on_duty_parent = "未安排/未登记"
+        parent_phone = "暂无联系方式"
+
+        for idx, row in df.iterrows():
+            raw_date = row[date_col]
+            if pd.isna(raw_date):
+                continue
+
+            # 处理 pandas 读入 standard 日期产生的 Timestamp 格式
+            if isinstance(raw_date, datetime.datetime) or hasattr(raw_date, 'strftime'):
+                row_date_val = raw_date.strftime("%Y-%m-%d")
+            elif isinstance(raw_date, float):
+                # Excel 浮点型日期转换
                 try:
-                    s = bytes(current_str).decode('utf-8')
-                    s_clean = re.sub(r'[\s\x00-\x1f]', '', s)
-                    if len(s_clean) >= 2:
-                        strings.append((idx - len(current_str), s_clean))
+                    row_date_val = pd.to_datetime(raw_date, unit='D', origin='1899-12-30').strftime("%Y-%m-%d")
                 except:
-                    pass
-            current_str = []
-    return strings, decompressed
+                    row_date_val = str(int(raw_date))
+            else:
+                row_date_val = str(raw_date).strip()
 
-def fix_mojibake(s):
-    try:
-        return s.encode('gbk', errors='ignore').decode('utf-8', errors='ignore')
-    except:
-        return s
+            # 精确匹配今天
+            matched = False
+            for opt in today_formatted_options:
+                if opt == row_date_val or (opt in row_date_val and len(opt) > 2):
+                    matched = True
+                    break
 
-def clean_parent_name(s):
-    """自适应还原 GBK 乱码，同时保护已经正常的 UTF-8 中文不被二次破坏"""
-    try:
-        fixed = s.encode('gbk', errors='ignore').decode('utf-8', errors='ignore')
-        raw_chinese = len(re.findall(r'[\u4e00-\u9fff]', s))
-        fixed_chinese = len(re.findall(r'[\u4e00-\u9fff]', fixed))
-        if fixed_chinese >= raw_chinese - 1 and fixed_chinese > 0:
-            return fixed
-    except Exception:
-        pass
-    return s
+            if matched:
+                on_duty_parent = str(row[parent_col]).strip()
+                parent_phone = str(row[phone_col]).strip()
+
+                # 去除 NaN 噪音
+                if on_duty_parent == "nan" or not on_duty_parent or on_duty_parent.isdigit():
+                    on_duty_parent = "未安排/未登记"
+                if parent_phone == "nan" or not parent_phone:
+                    parent_phone = "暂无联系方式"
+                elif "." in parent_phone:
+                    parent_phone = parent_phone.split(".")[0] # 去除浮点数 .0
+
+                print(f"✅ 成功定位到本日值班排班 (Row {idx+4}): {row_date_val} | 家长: {on_duty_parent} | 电话: {parent_phone}")
+                break
+
+        return on_duty_parent, parent_phone
+
+    except Exception as e:
+        print(f"解析 Excel 失败: {e}")
+        return None, None
 
 def main_handler():
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Referer": "https://docs.qq.com/"
-    }
-
-    print("1. 正在抓取腾讯文档公开主页并解析内部 padId...")
-    try:
-        resp = requests.get(TENCENT_DOC_URL, headers=headers)
-        if resp.status_code != 200:
-            print("抓取网页失败！")
-            return
-        html = resp.text
-    except Exception as e:
-        print(f"请求网页失败: {e}"); return
-
-    client_vars = extract_client_vars(html)
-    if not client_vars:
-        print("解析 clientVars 失败，请确认文档仍处于公开分享状态。")
+    # 步骤 1: 启动浏览器下载文件
+    success = asyncio.run(download_via_playwright())
+    if not success:
+        print("未能成功导出并获取最新的 Excel 报表。")
         return
 
-    pad_info = client_vars.get('docInfo', {}).get('padInfo', {})
-    domain_id = pad_info.get('domainId', '300000000')
-    pad_id_short = pad_info.get('padId', '')
-    pad_id = f"{domain_id}${pad_id_short}"
-
-    # 提取 Tabs 标签列表
-    tabs = []
-    footer_match = re.search(r'id="footerDomStr"[^>]*>([^<]+)</div>', html)
-    if footer_match:
-        try:
-            for t in json.loads(footer_match.group(1)):
-                tab_name = t.get('name', '')
-                try:
-                    tab_name = tab_name.encode('gbk', errors='ignore').decode('utf-8', errors='ignore')
-                except:
-                    pass
-                tabs.append({'id': t.get('id'), 'name': tab_name})
-        except:
-            pass
-
-    if not tabs:
-        print("未获取到子标签页。")
+    # 步骤 2: 解析 Excel 获取值班家长
+    parent_name, phone_num = parse_and_find_duty()
+    if not parent_name:
         return
 
-    # 定位当前月份工作表
     today = datetime.date.today()
-    current_month_str = f"{today.month}月"
-    target_tab = tabs[0]
-    for t in tabs:
-        if current_month_str in t['name']:
-            target_tab = t
-            break
-
-    print(f"2. 匹配当前工作表: [{target_tab['name']}]  (ID: {target_tab['id']})")
-
-    # 3. 直接调用 unauthenticated dop-api 获取第一手原始单元格流
-    print("3. 调用 dop-api 拉取单元格数据流...")
-    params = {
-        "padId": pad_id,
-        "subId": target_tab['id'],
-        "startrow": 0,
-        "endrow": 150,
-        "normal": 1,
-        "outformat": 1
-    }
-    api_url = f"https://docs.qq.com/dop-api/get/sheet?{urllib.parse.urlencode(params)}"
-
-    try:
-        api_resp = requests.get(api_url, headers={"User-Agent": headers["User-Agent"], "Referer": TENCENT_DOC_URL})
-        api_data = api_resp.json()
-    except Exception as e:
-        print(f"调用 dop-api 失败: {e}")
-        return
-
-    text_list = api_data.get('data', {}).get('initialAttributedText', {}).get('text', [])
-    if not text_list:
-        print("中继数据文本列表为空。")
-        return
-
-    related_sheet_compressed = text_list[0].get('related_sheet', '')
-    if not related_sheet_compressed:
-        print("中继数据中无压缩工作表。")
-        return
-
-    # 4. 解析二进制数据流
-    print("4. 解析并解压中继数据流...")
-    strings, decompressed = extract_strings_from_related_sheet(related_sheet_compressed)
-
-    # 提取日期序列：9月1日到30日对应的 Excel 双精度浮点序列 (46267.0 到 46296.0)
-    # 根据当前年份和月份自适应计算起止的 Excel 序列号
-    # Excel 1900 日期系统中 2026-09-01 是 46267
-    base_excel_date = datetime.date(1899, 12, 30)
-    month_start_date = datetime.date(today.year, today.month, 1)
-    if today.month == 12:
-        month_end_date = datetime.date(today.year + 1, 1, 1) - datetime.timedelta(days=1)
-    else:
-        month_end_date = datetime.date(today.year, today.month + 1, 1) - datetime.timedelta(days=1)
-
-    start_excel_val = (month_start_date - base_excel_date).days
-    end_excel_val = (month_end_date - base_excel_date).days
-
-    # 获取此工作表中所有的有效日期浮点数序列
-    date_offsets = []
-    for d_val in range(start_excel_val, end_excel_val + 1):
-        double_bytes = struct.pack("<d", float(d_val))
-        idx = decompressed.find(double_bytes)
-        if idx != -1:
-            date_offsets.append((idx, d_val))
-    date_offsets.sort()
-
-    # 提取所有的有效值班家长单元格字符串，排除指令、备注和样式噪音
-    parent_names = []
-    for offset, raw_s in strings:
-        # 正则：必须是带有学号开头的字符串 (例如 "16钮"、"34张鸿毅" 等)
-        if re.search(r'^\d+[\u4e00-\u9fff]+', raw_s):
-            fixed_s = clean_parent_name(raw_s)
-            if not any(k in fixed_s for k in ["值", "表", "校", "期", "提示", "时间", "流程", "备注"]):
-                parent_names.append((offset, fixed_s))
-    parent_names.sort()
-
-    # 提取所有的 11 位手机号
-    phone_numbers = []
-    for offset, s in strings:
-        if s.isdigit() and len(s) == 11:
-            phone_numbers.append((offset, s))
-    phone_numbers.sort()
-
-    # 5. 精准进行 1对1 序列化对齐
-    today_excel_val = (today - base_excel_date).days
-
-    today_rank_idx = -1
-    for idx, (offset, d_val) in enumerate(date_offsets):
-        if d_val == today_excel_val:
-            today_rank_idx = idx
-            break
-
-    if today_rank_idx == -1:
-        print(f"本日 ({today.strftime('%m月%d日')}) 没有在排班表的日期列中登记值班，跳过推送。")
-        return
-
-    if today_rank_idx >= len(parent_names):
-        print(f"排班对齐错误：本日排序为第 {today_rank_idx+1} 个日期，但仅提取出 {len(parent_names)} 个值班家长。")
-        return
-
-    on_duty_parent = parent_names[today_rank_idx][1]
-    parent_offset = parent_names[today_rank_idx][0]
-
-    # 寻找离当前值班家长最近的电话号码 (通常就在该名字后面 250 字节以内)
-    best_phone = "暂无联系方式"
-    min_dist = 99999
-    for p_offset, p_num in phone_numbers:
-        dist = abs(p_offset - parent_offset)
-        if dist < min_dist and dist < 250:
-            min_dist = dist
-            best_phone = p_num
-
     date_formatted = f"{today.strftime('%Y-%m-%d')} (周{['一','二','三','四','五','六','日'][today.weekday()]})"
-    print(f"\n🎉 完美对齐提取结果：")
-    print(f"  [日期] {date_formatted}")
-    print(f"  [家长] {on_duty_parent}")
-    print(f"  [电话] {best_phone}")
 
-    # 6. 安全推送至您的微信测试号
-    push_to_wechat_official(date_formatted, on_duty_parent, best_phone)
+    # 步骤 3: 官方安全通道推送
+    push_to_wechat_official(date_formatted, parent_name, phone_num)
 
 if __name__ == '__main__':
     main_handler()
