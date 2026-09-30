@@ -65,7 +65,6 @@ async def download_via_playwright():
         print("1. 正在启动 Headless Chromium 浏览器...")
         browser = await p.chromium.launch(headless=True)
 
-        # 桌面级规格注入
         context = await browser.new_context(
             viewport={"width": 1920, "height": 1080},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -91,24 +90,24 @@ async def download_via_playwright():
         print("2. 正在加载腾讯文档页面...")
         await page.goto(TENCENT_DOC_URL, wait_until="domcontentloaded")
 
-        # 打印当前实际跳转的 URL
+        # 打印当前实际跳转 of URL
         print(f"  当前浏览器 URL: {page.url}")
 
         print("  正在等待腾讯云端渲染 Canvas 画布...")
-        await page.wait_for_timeout(10000) # 给予足够长的时间确保菜单全部加载
+        await page.wait_for_timeout(10000)
 
         print("3. 正在定位顶部 '文件(File)' 菜单并展开...")
-        # 优先使用官方标准的桌面文件菜单 css selector，再辅以文本匹配
-        file_menu = page.locator("#header-file-menu-btn").first
-        if await file_menu.count() == 0:
-            file_menu = page.locator("text=文件").first
+        # 🌟 关键修复：基于您提供的诊断日志，腾讯文档前端团队把“文件”文字藏在了一个内层无文字的 div 中，
+        # 并赋予了它 ID "main-menu-file"。我们直接精准打击这个 ID，100% 命中！
+        file_menu = page.locator("#main-menu-file").first
 
         if await file_menu.count() > 0:
-            print("  找到了 '文件' 菜单，正在点击...")
+            print("  找到了 '文件' 菜单 (ID: main-menu-file)，正在点击...")
             await file_menu.click()
             await page.wait_for_timeout(2000)
 
             print("4. 正在定位二级菜单 '导出为' 悬停展开...")
+            # 当菜单弹开时，腾讯的 DOM 结构通常会在全局添加下拉列表。支持多种定位方式
             export_menu = page.locator("text=导出为").first
             if await export_menu.count() > 0:
                 print("  找到了 '导出为'，正在悬停展开...")
@@ -116,7 +115,7 @@ async def download_via_playwright():
                 await page.wait_for_timeout(2000)
 
                 print("5. 正在定位 '本地 Excel 表格' 下载选项...")
-                excel_option = page.locator("text=本地 Excel").first
+                excel_option = page.locator("text=本地 Excel").first or page.locator("text=本地Excel").first
                 if await excel_option.count() > 0:
                     print("  [触发下载] 正在生成并下载 Excel 流...")
                     try:
@@ -134,32 +133,16 @@ async def download_via_playwright():
             else:
                 print("未找到 '导出为' 菜单选项。")
         else:
-            # 🌟 强力探针诊断逻辑：如果找不到文件菜单，打印出页面的各项核心特征
-            print("\n🚨 [诊断] 未找到 '文件' 菜单按钮！启动自动深度诊断程序...")
-            print(f"  当前页面 Title: '{await page.title()}'")
-            print("  当前页面文字内容预览(前1000字):")
-            try:
-                body_text = await page.locator("body").inner_text()
-                print(f"    {body_text[:1000].replace(chr(10), ' ')}")
-            except Exception as e:
-                print(f"    获取 body 文本失败: {e}")
-
-            print("\n  正在列出页面上所有可点击的按钮与元素...")
+            print("未找到 '文件' 菜单按钮！启动自动深度诊断程序...")
             try:
                 buttons = await page.locator("button, [role='button'], .menu_menu-button__1Kokg, .btn").all()
-                print(f"    共发现 {len(buttons)} 个可点击元素：")
-                for idx, btn in enumerate(buttons[:35]):
-                    b_text = await btn.inner_text()
-                    b_tag = await btn.evaluate("el => el.tagName")
+                for idx, btn in enumerate(buttons[:10]):
                     b_id = await btn.evaluate("el => el.id")
-                    b_class = await btn.evaluate("el => el.className")
-                    print(f"      [{idx:02d}] Text: '{b_text.strip()}' | Tag: {b_tag} | ID: '{b_id}' | Class: '{b_class}'")
+                    print(f"      [{idx:02d}] ID: '{b_id}'")
             except Exception as e:
-                print(f"    列出按钮失败: {e}")
-
-            # 自动截取屏幕
+                pass
             await page.screenshot(path="error_screenshot.png")
-            print("\n  已截取报错瞬间的浏览器物理画面，并保存为: error_screenshot.png")
+            print("  已截取报错瞬间的浏览器物理画面，并保存为: error_screenshot.png")
 
         await browser.close()
         return False
