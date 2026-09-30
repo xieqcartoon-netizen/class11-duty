@@ -17,8 +17,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-          cache: 'pip'
+          python-version: '3.10' # 🌟 关键修复：删除了 cache: 'pip' 这一行，彻底解决报错！
 
       - name: Install Dependencies
         run: |
