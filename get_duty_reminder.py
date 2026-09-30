@@ -65,8 +65,7 @@ async def download_via_playwright():
         print("1. 正在启动 Headless Chromium 浏览器...")
         browser = await p.chromium.launch(headless=True)
 
-        # 🌟 关键修复：设置标准的桌面分辨率、真实的浏览器 User-Agent 以及 zh-CN 语言环境！
-        # 避免腾讯文档由于环境指纹（如分辨率过小）判定为手机端，从而隐藏“文件”菜单或触发防爬重定向！
+        # 桌面级规格注入
         context = await browser.new_context(
             viewport={"width": 1920, "height": 1080},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -96,7 +95,7 @@ async def download_via_playwright():
         print(f"  当前浏览器 URL: {page.url}")
 
         print("  正在等待腾讯云端渲染 Canvas 画布...")
-        await page.wait_for_timeout(8000) # 给画布和菜单多 2 秒加载缓冲时间
+        await page.wait_for_timeout(10000) # 给予足够长的时间确保菜单全部加载
 
         print("3. 正在定位顶部 '文件(File)' 菜单并展开...")
         # 优先使用官方标准的桌面文件菜单 css selector，再辅以文本匹配
@@ -135,10 +134,32 @@ async def download_via_playwright():
             else:
                 print("未找到 '导出为' 菜单选项。")
         else:
-            print("未找到 '文件' 菜单按钮！")
-            # 🌟 终极自愈诊断：保存报错瞬间的屏幕截图，方便一眼看清到底是 Cookie 过期重定向了，还是触发了验证码！
+            # 🌟 强力探针诊断逻辑：如果找不到文件菜单，打印出页面的各项核心特征
+            print("\n🚨 [诊断] 未找到 '文件' 菜单按钮！启动自动深度诊断程序...")
+            print(f"  当前页面 Title: '{await page.title()}'")
+            print("  当前页面文字内容预览(前1000字):")
+            try:
+                body_text = await page.locator("body").inner_text()
+                print(f"    {body_text[:1000].replace(chr(10), ' ')}")
+            except Exception as e:
+                print(f"    获取 body 文本失败: {e}")
+
+            print("\n  正在列出页面上所有可点击的按钮与元素...")
+            try:
+                buttons = await page.locator("button, [role='button'], .menu_menu-button__1Kokg, .btn").all()
+                print(f"    共发现 {len(buttons)} 个可点击元素：")
+                for idx, btn in enumerate(buttons[:35]):
+                    b_text = await btn.inner_text()
+                    b_tag = await btn.evaluate("el => el.tagName")
+                    b_id = await btn.evaluate("el => el.id")
+                    b_class = await btn.evaluate("el => el.className")
+                    print(f"      [{idx:02d}] Text: '{b_text.strip()}' | Tag: {b_tag} | ID: '{b_id}' | Class: '{b_class}'")
+            except Exception as e:
+                print(f"    列出按钮失败: {e}")
+
+            # 自动截取屏幕
             await page.screenshot(path="error_screenshot.png")
-            print("已截取报错瞬间的浏览器画面，并保存为: error_screenshot.png")
+            print("\n  已截取报错瞬间的浏览器物理画面，并保存为: error_screenshot.png")
 
         await browser.close()
         return False
