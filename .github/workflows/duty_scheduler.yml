@@ -4,7 +4,7 @@ on:
   schedule:
     # 每天北京时间早上 8:00 (UTC 时间 0:00) 自动触发
     - cron: '0 0 * * *'
-  workflow_dispatch: # 保持开启，支持随时手动点击运行
+  workflow_dispatch: # 支持随时手动点击运行
 
 jobs:
   run-reminder:
@@ -17,7 +17,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10' # 🌟 关键修复：删除了 cache: 'pip' 这一行，彻底解决报错！
+          python-version: '3.10'
 
       - name: Install Dependencies
         run: |
@@ -31,3 +31,11 @@ jobs:
         env:
           TENCENT_COOKIE: ${{ secrets.TENCENT_COOKIE }}
         run: python get_duty_reminder.py
+
+      # 🌟 关键修复：一旦运行失败，自动将报错瞬间的屏幕截图打包为 artifact 供您下载！
+      - name: Upload Error Screenshot on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: error-screenshot
+          path: error_screenshot.png
