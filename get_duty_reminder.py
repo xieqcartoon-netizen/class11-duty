@@ -218,8 +218,7 @@ def parse_and_find_duty():
                 if parent_phone == "nan" or not parent_phone:
                     parent_phone = "暂无联系方式"
 
-                print(f"✅ 成功定位到本日值班排班 (Row {idx+4}): {row_date_val} | 家长: {on_duty_parent} | 电话:
-{parent_phone}")
+                print(f"✅ 成功定位到本日值班排班 (Row {idx+4}): {row_date_val} | 家长: {on_duty_parent} | 电话: {parent_phone}")
                 break
 
         return on_duty_parent, parent_phone
