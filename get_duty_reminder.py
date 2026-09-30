@@ -5,6 +5,8 @@ import datetime
 import os
 import requests
 import re
+import zipfile
+from tempfile import NamedTemporaryFile
 TENCENT_DOC_URL = "https://docs.qq.com/sheet/DY2Z5dGpBY1p4T0xo"
 OUTPUT_FILENAME = "temp_duty_sheet.xlsx"
 APPID = "wxa51aa91318272a31"
@@ -44,6 +46,24 @@ def push_to_wechat_official(date_str, parent_name, phone_num):
         print("微信推送结果:", resp.json())
     except Exception as e:
         print("推送微信时发生异常:", e)
+def fix_xlsx_empty_styles(path):
+    with NamedTemporaryFile(delete=False) as tmp:
+        tmp_name = tmp.name
+    try:
+        with zipfile.ZipFile(path, "r") as zin, zipfile.ZipFile(tmp_name, "w") as zout:
+            for item in zin.infolist():
+                buffer = zin.read(item.filename)
+                if item.filename == "xl/styles.xml":
+                    styles = buffer.decode("utf-8")
+                    styles = re.sub(r'<fill\s*/>|<fill>\s*</fill>', '<fill><patternFill patternType="none"/></fill>', styles)
+                    buffer = styles.encode("utf-8")
+                zout.writestr(item, buffer)
+        os.replace(tmp_name, path)
+    except Exception as e:
+        print(f"自动修复 Excel 样式异常: {e}")
+    finally:
+        if os.path.exists(tmp_name):
+            os.remove(tmp_name)
 async def download_via_playwright():
     if not TENCENT_COOKIE:
         print("错误: 未在 GitHub Secrets 中配置 TENCENT_COOKIE 密钥!")
@@ -126,6 +146,7 @@ def parse_and_find_duty():
     if not os.path.exists(OUTPUT_FILENAME):
         print("错误: 未找到本地下载的 Excel 表格文件!")
         return None, None
+    fix_xlsx_empty_styles(OUTPUT_FILENAME)
     try:
         xl = pd.ExcelFile(OUTPUT_FILENAME)
         sheet_name = xl.sheet_names[0]
